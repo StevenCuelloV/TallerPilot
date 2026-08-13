@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.npm-cache/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+server/data/*.json
+server/uploads/*
+!server/uploads/.gitkeep
