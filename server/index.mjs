@@ -13,6 +13,8 @@ import { ensureDb, id, readDb, resetDb, updateDb } from './db.mjs'
 import { PLANS, findPlan, planAmount } from './plans.mjs'
 import { WOMPI_CHECKOUT_URL, integritySignature, paymentReference, verifyWompiEvent } from './wompi.mjs'
 import { BRAND } from './brand.mjs'
+import { initializeSupabaseIfRequested, supabaseConfigured } from './supabase.mjs'
+import { createSupabaseRouter } from './supabase-router.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here,'..')
@@ -24,8 +26,9 @@ const JWT_SECRET = process.env.JWT_SECRET || DEMO_JWT_SECRET
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 const APP_BASE_URL = process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173'
 const app = express()
-if(IS_PRODUCTION&&JWT_SECRET===DEMO_JWT_SECRET)throw new Error('JWT_SECRET seguro es obligatorio en producción')
-await ensureDb(); await fsp.mkdir(uploadDir,{recursive:true})
+if(IS_PRODUCTION&&!supabaseConfigured&&JWT_SECRET===DEMO_JWT_SECRET)throw new Error('JWT_SECRET seguro es obligatorio en producción')
+const supabaseSetup=supabaseConfigured?await initializeSupabaseIfRequested():null
+if(!supabaseConfigured){await ensureDb();await fsp.mkdir(uploadDir,{recursive:true})}
 
 app.disable('x-powered-by')
 if(IS_PRODUCTION)app.set('trust proxy',1)
@@ -33,12 +36,17 @@ app.use(helmet({
   crossOriginResourcePolicy:{policy:'cross-origin'},
   contentSecurityPolicy:{directives:{
     defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'",'https://fonts.googleapis.com'],
-    fontSrc:["'self'",'https://fonts.gstatic.com','data:'],imgSrc:["'self'",'data:','blob:'],
+    fontSrc:["'self'",'https://fonts.gstatic.com','data:'],imgSrc:["'self'",'data:','blob:','https:'],
     connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],
   }},
 }))
 app.use(express.json({limit:'12mb'}))
 app.use('/uploads',express.static(uploadDir))
+
+if(supabaseConfigured){
+  app.use(createSupabaseRouter({appBaseUrl:APP_BASE_URL,isProduction:IS_PRODUCTION,setupState:supabaseSetup}))
+  console.log(`Supabase conectado (${supabaseSetup?.initialized?'taller inicializado':'falta INITIAL_ADMIN_PASSWORD'})`)
+}
 
 const upload = multer({storage:multer.diskStorage({destination:uploadDir,filename:(_req,file,cb)=>cb(null,`${Date.now()}-${Math.random().toString(36).slice(2,7)}${path.extname(file.originalname).toLowerCase()}`)}),limits:{fileSize:10*1024*1024,files:8},fileFilter:(_req,file,cb)=>cb(null,file.mimetype.startsWith('image/'))})
 

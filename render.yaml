@@ -12,3 +12,19 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_EVIDENCE_BUCKET
+        value: order-evidence
+      - key: INITIAL_WORKSHOP_NIT
+        value: "90234566"
+      - key: INITIAL_ADMIN_EMAIL
+        value: motorpro@gmail.com
+      - key: INITIAL_ADMIN_NAME
+        value: Administrador Taller Motor Pro
+      - key: INITIAL_ADMIN_PASSWORD
+        sync: false

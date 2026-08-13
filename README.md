@@ -23,7 +23,9 @@ npm run build
 
 El repositorio incluye `render.yaml`. En Render selecciona **New → Blueprint**, conecta este repositorio y confirma el servicio `tallerpilot-demo`. La plantilla instala también las dependencias de compilación, genera el frontend, inicia Express, crea un secreto JWT y comprueba `/api/health`.
 
-Esta publicación es apropiada para demostraciones: la base JSON y las fotos usan el sistema de archivos temporal del servidor y pueden reiniciarse en un despliegue. Antes de incorporar talleres reales se deben migrar autenticación, datos y archivos a Supabase/PostgreSQL.
+Cuando `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` y `SUPABASE_SECRET_KEY` están configuradas en Render, TallerPilot usa Supabase Auth, PostgreSQL multiempresa y el bucket privado `order-evidence`. Sin esas variables conserva el almacenamiento JSON local únicamente para desarrollo.
+
+En la primera conexión agrega temporalmente `INITIAL_ADMIN_PASSWORD` en Render con una contraseña única de mínimo 12 caracteres. Al arrancar, el backend crea Taller Motor Pro, su suscripción de prueba y el propietario `motorpro@gmail.com`. Comprueba el acceso y después elimina esa variable; la cuenta permanece en Supabase Auth.
 
 ## Incluido en el prototipo
 
@@ -58,7 +60,7 @@ La ruta comercial y técnica está detallada en [`docs/GUIA-LANZAMIENTO-SAAS.md`
 
 ## Alcance técnico actual
 
-La aplicación es una demostración full-stack en React + TypeScript y Express. El backend guarda clientes, vehículos, órdenes, fotos, notas, cotizaciones, facturas y gastos en un archivo JSON local. WhatsApp funciona mediante enlaces con mensajes prellenados y las cotizaciones se descargan como PDF. La automatización de WhatsApp Business y la facturación electrónica requieren servicios reales antes de entrar en producción.
+La aplicación es full-stack en React + TypeScript y Express. En producción, el backend guarda clientes, vehículos, órdenes, fotos, notas, cotizaciones, facturas y gastos en Supabase, siempre limitados al taller autenticado. Las fotos permanecen privadas y se muestran con enlaces temporales. WhatsApp funciona mediante enlaces con mensajes prellenados y las cotizaciones se descargan como PDF. La automatización de WhatsApp Business y la facturación electrónica todavía requieren servicios externos.
 
 ## Siguiente fase recomendada
 
