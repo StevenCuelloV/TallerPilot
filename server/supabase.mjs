@@ -138,6 +138,7 @@ async function signedEvidenceUrls(evidence) {
 
 export async function bootstrapSupabase(context) {
   const workshopId = context.workshopId
+  const canViewAccounting = ['owner', 'admin', 'accountant'].includes(context.roleDb)
   const queries = await Promise.all([
     supabaseAdmin.from('customers').select('*').eq('workshop_id', workshopId).order('created_at', { ascending: false }),
     supabaseAdmin.from('vehicles').select('*').eq('workshop_id', workshopId),
@@ -146,9 +147,9 @@ export async function bootstrapSupabase(context) {
     supabaseAdmin.from('order_evidence').select('*').eq('workshop_id', workshopId).order('created_at'),
     supabaseAdmin.from('quotes').select('*').eq('workshop_id', workshopId).order('created_at', { ascending: false }),
     supabaseAdmin.from('quote_items').select('*').eq('workshop_id', workshopId),
-    supabaseAdmin.from('invoices').select('*').eq('workshop_id', workshopId).order('created_at', { ascending: false }),
-    supabaseAdmin.from('expenses').select('*').eq('workshop_id', workshopId).order('expense_date', { ascending: false }),
-    supabaseAdmin.from('subscriptions').select('*').eq('workshop_id', workshopId).maybeSingle(),
+    canViewAccounting ? supabaseAdmin.from('invoices').select('*').eq('workshop_id', workshopId).order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+    canViewAccounting ? supabaseAdmin.from('expenses').select('*').eq('workshop_id', workshopId).order('expense_date', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+    canViewAccounting ? supabaseAdmin.from('subscriptions').select('*').eq('workshop_id', workshopId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     supabaseAdmin.from('audit_logs').select('*').eq('workshop_id', workshopId).eq('entity_type', 'work_order').order('created_at'),
     supabaseAdmin.from('memberships').select('user_id,role').eq('workshop_id', workshopId).eq('active', true),
   ])

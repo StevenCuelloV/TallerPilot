@@ -20,6 +20,12 @@ const upload = multer({
 const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 const adminOnly = (req, res, next) => ['Administrador', 'Propietario'].includes(req.user?.role)
   ? next() : res.status(403).json({ error: 'Esta acción requiere rol de administrador' })
+const allowRoles = (...roles) => (req, res, next) => roles.includes(req.user?.role)
+  ? next() : res.status(403).json({ error: 'Tu rol no permite realizar esta acción' })
+const customerWrite = allowRoles('Propietario', 'Administrador', 'Asesor')
+const orderWrite = allowRoles('Propietario', 'Administrador', 'Asesor', 'Técnico')
+const noteWrite = allowRoles('Propietario', 'Administrador', 'Asesor', 'Técnico', 'Contador')
+const accountingWrite = allowRoles('Propietario', 'Administrador', 'Contador')
 const formatMoney = value => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value)
 
 export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
@@ -78,18 +84,18 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   }))
   router.post('/api/billing/demo-confirm', (_req, res) => res.status(isProduction ? 404 : 501).json({ error: 'La simulación de pagos no modifica la base de datos real' }))
 
-  router.post('/api/customers', asyncRoute(async (req, res) => { const data = await createSupabaseCustomer(req.user, req.body); broadcast('customer.created', data); res.status(201).json(data) }))
-  router.put('/api/customers/:id', asyncRoute(async (req, res) => { const data = await updateSupabaseCustomer(req.user, req.params.id, req.body); broadcast('customer.updated', data); res.json(data) }))
-  router.delete('/api/customers/:id', asyncRoute(async (req, res) => { await deleteSupabaseCustomer(req.user, req.params.id); res.status(204).end() }))
-  router.post('/api/orders', asyncRoute(async (req, res) => { const data = await createSupabaseOrder(req.user, req.body); broadcast('order.created', data); res.status(201).json(data) }))
-  router.put('/api/orders/:id', asyncRoute(async (req, res) => { const data = await updateSupabaseOrder(req.user, req.params.id, req.body); broadcast('order.updated', data); res.json(data) }))
-  router.post('/api/orders/:id/notes', asyncRoute(async (req, res) => { const data = await addSupabaseNote(req.user, req.params.id, req.body?.text); broadcast('order.note', { orderId: req.params.id, note: data }); res.status(201).json(data) }))
-  router.post('/api/orders/:id/evidence', upload.array('files', 8), asyncRoute(async (req, res) => {
+  router.post('/api/customers', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseCustomer(req.user, req.body); broadcast('customer.created', data); res.status(201).json(data) }))
+  router.put('/api/customers/:id', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseCustomer(req.user, req.params.id, req.body); broadcast('customer.updated', data); res.json(data) }))
+  router.delete('/api/customers/:id', customerWrite, asyncRoute(async (req, res) => { await deleteSupabaseCustomer(req.user, req.params.id); res.status(204).end() }))
+  router.post('/api/orders', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseOrder(req.user, req.body); broadcast('order.created', data); res.status(201).json(data) }))
+  router.put('/api/orders/:id', orderWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseOrder(req.user, req.params.id, req.body); broadcast('order.updated', data); res.json(data) }))
+  router.post('/api/orders/:id/notes', noteWrite, asyncRoute(async (req, res) => { const data = await addSupabaseNote(req.user, req.params.id, req.body?.text); broadcast('order.note', { orderId: req.params.id, note: data }); res.status(201).json(data) }))
+  router.post('/api/orders/:id/evidence', orderWrite, upload.array('files', 8), asyncRoute(async (req, res) => {
     if (!req.files?.length) return res.status(400).json({ error: 'Selecciona al menos una fotografía JPG, PNG o WEBP' })
     const data = await addSupabaseEvidence(req.user, req.params.id, req.files, req.body.type || 'Proceso', req.body.caption || '')
     broadcast('order.evidence', { orderId: req.params.id, items: data }); res.status(201).json(data)
   }))
-  router.put('/api/orders/:id/quote', asyncRoute(async (req, res) => { const data = await updateSupabaseQuote(req.user, req.params.id, req.body); broadcast('order.quote', { orderId: req.params.id, quote: data }); res.json(data) }))
+  router.put('/api/orders/:id/quote', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseQuote(req.user, req.params.id, req.body); broadcast('order.quote', { orderId: req.params.id, quote: data }); res.json(data) }))
 
   router.get('/api/orders/:id/quote.pdf', asyncRoute(async (req, res) => {
     const db = await bootstrapSupabase(req.user), order = db.orders.find(item => item.id === req.params.id)
@@ -104,8 +110,8 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
     doc.moveTo(330, y).lineTo(547, y).stroke().text(`Subtotal: ${formatMoney(subtotal)}`, 330, y + 12, { width: 217, align: 'right' }).text(`IVA (${order.quote.taxRate || 0}%): ${formatMoney(tax)}`, 330, y + 30, { width: 217, align: 'right' }).fontSize(13).fillColor('#ef633f').text(`TOTAL: ${formatMoney(subtotal + tax)}`, 330, y + 52, { width: 217, align: 'right' })
     doc.fontSize(9).fillColor('#6d7788').text('Esta cotización no representa control de inventario.', 48, 730, { width: 499, align: 'center' }); doc.end()
   }))
-  router.post('/api/expenses', asyncRoute(async (req, res) => { const data = await createSupabaseExpense(req.user, req.body); broadcast('expense.created', data); res.status(201).json(data) }))
-  router.post('/api/invoices', asyncRoute(async (req, res) => { const data = await createSupabaseInvoice(req.user, req.body); broadcast('invoice.created', data); res.status(201).json(data) }))
+  router.post('/api/expenses', accountingWrite, asyncRoute(async (req, res) => { const data = await createSupabaseExpense(req.user, req.body); broadcast('expense.created', data); res.status(201).json(data) }))
+  router.post('/api/invoices', allowRoles('Propietario', 'Administrador', 'Asesor', 'Contador'), asyncRoute(async (req, res) => { const data = await createSupabaseInvoice(req.user, req.body); broadcast('invoice.created', data); res.status(201).json(data) }))
   router.post('/api/orders/:id/whatsapp', asyncRoute(async (req, res) => {
     const db = await bootstrapSupabase(req.user), order = db.orders.find(item => item.id === req.params.id)
     if (!order) return res.status(404).json({ error: 'Orden no encontrada' })
