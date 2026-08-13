@@ -21,7 +21,7 @@ npm run build
 
 ## Publicar la demostración en Render
 
-El repositorio incluye `render.yaml`. En Render selecciona **New → Blueprint**, conecta este repositorio y confirma el servicio `tallerpilot-demo`. La plantilla ejecuta la compilación, inicia Express, crea un secreto JWT y comprueba `/api/health`.
+El repositorio incluye `render.yaml`. En Render selecciona **New → Blueprint**, conecta este repositorio y confirma el servicio `tallerpilot-demo`. La plantilla instala también las dependencias de compilación, genera el frontend, inicia Express, crea un secreto JWT y comprueba `/api/health`.
 
 Esta publicación es apropiada para demostraciones: la base JSON y las fotos usan el sistema de archivos temporal del servidor y pueden reiniciarse en un despliegue. Antes de incorporar talleres reales se deben migrar autenticación, datos y archivos a Supabase/PostgreSQL.
 
