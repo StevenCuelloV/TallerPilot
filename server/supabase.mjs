@@ -502,23 +502,25 @@ export async function processSupabaseWompiEvent(event) {
 }
 
 async function seedInitialWorkshop(workshopId, ownerId) {
-  const { count, error: countError } = await supabaseAdmin.from('customers').select('*', { count: 'exact', head: true }).eq('workshop_id', workshopId)
-  databaseError(countError)
-  if (count) return
-  const customerResult = await supabaseAdmin.from('customers').insert([
+  const customerResult = await supabaseAdmin.from('customers').upsert([
     { workshop_id: workshopId, kind: 'person', document_type: 'CC', document_number: '78945231', name: 'Carlos Ramírez', phone: '3004567890', email: 'carlos@example.com', address: 'Montería, Córdoba' },
     { workshop_id: workshopId, kind: 'company', document_type: 'NIT', document_number: '901335421-8', name: 'Transportes del Sinú SAS', phone: '3126428820', email: 'operaciones@transportessinu.co', address: 'Cereté, Córdoba' },
-  ]).select()
+  ], { onConflict: 'workshop_id,document_number' }).select()
   databaseError(customerResult.error)
-  const [carlos, transportes] = customerResult.data
-  const vehicleResult = await supabaseAdmin.from('vehicles').insert([
+  const carlos = customerResult.data.find(customer => customer.document_number === '78945231')
+  const transportes = customerResult.data.find(customer => customer.document_number === '901335421-8')
+  const vehicleResult = await supabaseAdmin.from('vehicles').upsert([
     { workshop_id: workshopId, customer_id: carlos.id, plate: 'JTU427', brand: 'Mazda', model: 'CX-30 Touring', model_year: 2022, color: 'Gris metálico', mileage: 48320 },
     { workshop_id: workshopId, customer_id: transportes.id, plate: 'WMN521', brand: 'Chevrolet', model: 'NHR', model_year: 2021, color: 'Blanco', mileage: 114200 },
-  ]).select()
+  ], { onConflict: 'workshop_id,plate' }).select()
   databaseError(vehicleResult.error)
-  const [mazda, nhr] = vehicleResult.data
+  const mazda = vehicleResult.data.find(vehicle => vehicle.plate === 'JTU427')
+  const nhr = vehicleResult.data.find(vehicle => vehicle.plate === 'WMN521')
+  const { count: orderCount, error: orderCountError } = await supabaseAdmin.from('work_orders').select('*', { count: 'exact', head: true }).eq('workshop_id', workshopId)
+  databaseError(orderCountError)
+  if (orderCount) return
   const orderResult = await supabaseAdmin.from('work_orders').insert([
-    { workshop_id: workshopId, customer_id: carlos.id, vehicle_id: mazda.id, assigned_user_id: ownerId, service_area: 'Mecánica general', stage: 'Diagnóstico', progress: 26, reason: 'Vibración al frenar y revisión preventiva.', mileage: 48320, fuel_level: '½ tanque', received_items: 'Llave + documentos' },
+    { workshop_id: workshopId, customer_id: carlos.id, vehicle_id: mazda.id, assigned_user_id: ownerId, service_area: 'Mecánica general', stage: 'Diagnóstico', progress: 26, reason: 'Vibración al frenar y revisión preventiva.', mileage: 48320, fuel_level: '½ tanque', received_items: 'Llave + documentos', affected_areas: [] },
     { workshop_id: workshopId, customer_id: transportes.id, vehicle_id: nhr.id, assigned_user_id: ownerId, service_area: 'Latonería y pintura', stage: 'Control de calidad', progress: 88, reason: 'Reparación de golpe lateral y pintura.', mileage: 114200, fuel_level: '¼ tanque', received_items: 'Llave', affected_areas: ['Puerta derecha', 'Guardabarros delantero'], paint_color: 'Blanco' },
   ]).select()
   databaseError(orderResult.error)
@@ -544,9 +546,12 @@ export async function initializeSupabaseIfRequested() {
   let { data: workshop, error } = await supabaseAdmin.from('workshops').select('*').eq('nit', nit).maybeSingle()
   databaseError(error)
   if (workshop) {
-    const { data: owner, error: ownerError } = await supabaseAdmin.from('memberships').select('id').eq('workshop_id', workshop.id).eq('role', 'owner').eq('active', true).limit(1).maybeSingle()
+    const { data: owner, error: ownerError } = await supabaseAdmin.from('memberships').select('id,user_id').eq('workshop_id', workshop.id).eq('role', 'owner').eq('active', true).limit(1).maybeSingle()
     databaseError(ownerError)
-    if (owner) return { configured: true, initialized: true, workshopId: workshop.id }
+    if (owner) {
+      await seedInitialWorkshop(workshop.id, owner.user_id)
+      return { configured: true, initialized: true, workshopId: workshop.id }
+    }
   }
 
   const password = process.env.INITIAL_ADMIN_PASSWORD
