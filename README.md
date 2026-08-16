@@ -27,7 +27,7 @@ Cuando `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` y `SUPABASE_SECRET_KEY` están
 
 En la primera conexión agrega temporalmente `INITIAL_ADMIN_PASSWORD` en Render con una contraseña única de mínimo 12 caracteres. Al arrancar, el backend crea Taller Motor Pro, su suscripción de prueba y el propietario `motorpro@gmail.com`. Comprueba el acceso y después elimina esa variable; la cuenta permanece en Supabase Auth.
 
-El acceso público incluye registro de talleres y recuperación de contraseña. Mientras se valida la demostración, `AUTH_REQUIRE_EMAIL_CONFIRMATION=false` permite crear la cuenta e ingresar inmediatamente. Antes de producción configura un servidor SMTP propio en Supabase y cambia esta variable a `true`, de modo que cada propietario deba confirmar su correo.
+El acceso público incluye registro de talleres y recuperación de contraseña. Cada taller nuevo comienza en el plan Gratis permanente: 1 usuario, 20 órdenes mensuales y hasta 5 fotos por orden. Mientras se valida la demostración, `AUTH_REQUIRE_EMAIL_CONFIRMATION=false` permite crear la cuenta e ingresar inmediatamente. Antes de producción configura un servidor SMTP propio en Supabase y cambia esta variable a `true`, de modo que cada propietario deba confirmar su correo.
 
 ## Incluido en el prototipo
 
@@ -52,7 +52,7 @@ El acceso público incluye registro de talleres y recuperación de contraseña. 
 - Órdenes de pintura con color/código y zonas afectadas.
 - Eventos en tiempo real mediante Server-Sent Events.
 - Carga persistente de evidencias y generación real de PDF.
-- Tres planes SaaS mensual/anual con límites de usuarios y órdenes.
+- Un plan Gratis permanente y tres planes SaaS mensual/anual, con límites reales de usuarios, órdenes y evidencias.
 - Alta de usuarios por rol desde Configuración.
 - Checkout Wompi preparado, webhook firmado y pago simulado para demos.
 - Esquema PostgreSQL/Supabase multiempresa con Row Level Security.

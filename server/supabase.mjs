@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { PLANS } from './plans.mjs'
 
 const url = process.env.SUPABASE_URL?.trim()
 const publishableKey = (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)?.trim()
@@ -29,6 +30,25 @@ function databaseError(error, fallback = 'No fue posible completar la operación
   const status = error.code === '23505' ? 409 : error.status || 500
   const message = error.code === '23505' ? 'Ya existe un registro con esos datos' : error.message || fallback
   throw Object.assign(new Error(message), { status })
+}
+
+async function syncPlanCatalog() {
+  const rows = PLANS.map(plan => ({
+    id: plan.id, name: plan.name, description: plan.description,
+    monthly_price_cop: plan.monthlyPrice, annual_price_cop: plan.annualPrice,
+    limits: plan.limits, features: plan.features, active: true,
+  }))
+  const { error } = await supabaseAdmin.from('plans').upsert(rows, { onConflict: 'id' })
+  databaseError(error, 'No fue posible sincronizar el catálogo de planes')
+}
+
+async function currentPlan(context) {
+  const { data: subscription, error: subscriptionError } = await supabaseAdmin.from('subscriptions').select('plan_id').eq('workshop_id', context.workshopId).maybeSingle()
+  databaseError(subscriptionError)
+  const planId = subscription?.plan_id || 'gratis'
+  const { data: plan, error: planError } = await supabaseAdmin.from('plans').select('id,name,limits').eq('id', planId).maybeSingle()
+  databaseError(planError)
+  return plan || { id: 'gratis', name: 'Gratis', limits: PLANS.find(item => item.id === 'gratis').limits }
 }
 
 function publicOrderId(orderNumber) {
@@ -150,13 +170,15 @@ export async function registerSupabaseWorkshop(input, appBaseUrl) {
       phone: account.phone,
       whatsapp: account.phone.replace(/\D/g, ''),
       city: account.city,
+      status: 'active',
+      trial_ends_at: null,
     }).select().single()
     databaseError(createdWorkshop.error); workshop = createdWorkshop.data
     const profile = await supabaseAdmin.from('profiles').insert({ id: authUser.id, full_name: account.fullName, phone: account.phone }).select().single()
     databaseError(profile.error)
     const membership = await supabaseAdmin.from('memberships').insert({ workshop_id: workshop.id, user_id: authUser.id, role: 'owner' }).select().single()
     databaseError(membership.error)
-    const subscription = await supabaseAdmin.from('subscriptions').insert({ workshop_id: workshop.id, plan_id: 'esencial', status: 'trialing', billing_period: 'monthly' }).select().single()
+    const subscription = await supabaseAdmin.from('subscriptions').insert({ workshop_id: workshop.id, plan_id: 'gratis', status: 'active', billing_period: 'monthly' }).select().single()
     databaseError(subscription.error)
   } catch (error) {
     if (workshop) await supabaseAdmin.from('workshops').delete().eq('id', workshop.id)
@@ -173,7 +195,7 @@ export async function registerSupabaseWorkshop(input, appBaseUrl) {
     requiresEmailConfirmation: requireEmailConfirmation && !accessToken,
     message: requireEmailConfirmation && !accessToken
       ? 'Cuenta creada. Revisa tu correo para confirmar el acceso.'
-      : 'Tu taller fue creado y ya puedes comenzar.',
+      : 'Tu taller fue creado con el plan Gratis y ya puedes comenzar.',
   }
 }
 
@@ -388,11 +410,11 @@ export async function createSupabaseUser(context, input) {
   if (name.length < 3 || !/^\S+@\S+\.\S+$/.test(email) || password.length < 10 || !role) {
     throw Object.assign(new Error('Nombre, correo válido, rol y contraseña de mínimo 10 caracteres son obligatorios'), { status: 400 })
   }
-  const bootstrap = await bootstrapSupabase(context)
-  const planId = bootstrap.subscription?.planId || 'esencial'
-  const { data: planRow } = await supabaseAdmin.from('plans').select('limits').eq('id', planId).maybeSingle()
+  const planRow = await currentPlan(context)
   const existingUsers = await listSupabaseUsers(context)
-  if (existingUsers.length >= Number(planRow?.limits?.users || 3)) throw Object.assign(new Error('El plan actual alcanzó su límite de usuarios'), { status: 409 })
+  if (existingUsers.length >= Number(planRow.limits?.users || 1)) {
+    throw Object.assign(new Error(`El plan ${planRow.name} permite ${planRow.limits.users} usuario. Mejora a Esencial para agregar a tu equipo.`), { status: 409, code: 'PLAN_LIMIT' })
+  }
 
   const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: name } })
   databaseError(authError)
@@ -465,9 +487,10 @@ export async function createSupabaseOrder(context, input) {
   if (!customer || !vehicle || vehicle.customer_id !== customer.id) throw Object.assign(new Error('Selecciona un cliente y vehículo válidos'), { status: 400 })
   const startOfMonth = new Date(); startOfMonth.setUTCDate(1); startOfMonth.setUTCHours(0, 0, 0, 0)
   const { count } = await supabaseAdmin.from('work_orders').select('*', { count: 'exact', head: true }).eq('workshop_id', context.workshopId).gte('created_at', startOfMonth.toISOString())
-  const { data: subscription } = await supabaseAdmin.from('subscriptions').select('plan_id').eq('workshop_id', context.workshopId).maybeSingle()
-  const { data: plan } = await supabaseAdmin.from('plans').select('limits').eq('id', subscription?.plan_id || 'esencial').maybeSingle()
-  if ((count || 0) >= Number(plan?.limits?.monthlyOrders || 150)) throw Object.assign(new Error('El plan actual alcanzó el límite mensual de órdenes'), { status: 409 })
+  const plan = await currentPlan(context)
+  if ((count || 0) >= Number(plan.limits?.monthlyOrders || 20)) {
+    throw Object.assign(new Error(`Alcanzaste las ${plan.limits.monthlyOrders} órdenes mensuales del plan ${plan.name}. Mejora tu plan para seguir creando órdenes.`), { status: 409, code: 'PLAN_LIMIT' })
+  }
 
   let assignedUserId = null
   if (input.tech && input.tech !== 'Por asignar') {
@@ -522,6 +545,13 @@ export async function addSupabaseNote(context, orderId, text) {
 
 export async function addSupabaseEvidence(context, orderId, files, type, caption = '') {
   const order = await getOrder(context, orderId)
+  const plan = await currentPlan(context)
+  const evidenceLimit = Number(plan.limits?.evidencePerOrder || 5)
+  const { count, error: countError } = await supabaseAdmin.from('order_evidence').select('*', { count: 'exact', head: true }).eq('workshop_id', context.workshopId).eq('order_id', order.id)
+  databaseError(countError)
+  if ((count || 0) + files.length > evidenceLimit) {
+    throw Object.assign(new Error(`El plan ${plan.name} permite hasta ${evidenceLimit} fotos por orden. Mejora tu plan para guardar más evidencias.`), { status: 409, code: 'PLAN_LIMIT' })
+  }
   const uploaded = []
   try {
     for (const [index, file] of files.entries()) {
@@ -585,12 +615,19 @@ export async function createSupabaseInvoice(context, input) {
 }
 
 export async function subscriptionSupabase(context) {
-  const { data: subscription, error } = await supabaseAdmin.from('subscriptions').select('*').eq('workshop_id', context.workshopId).maybeSingle()
+  const startOfMonth = new Date(); startOfMonth.setUTCDate(1); startOfMonth.setUTCHours(0, 0, 0, 0)
+  const [{ data: subscription, error }, { data: payments, error: paymentError }, usersResult, ordersResult] = await Promise.all([
+    supabaseAdmin.from('subscriptions').select('*').eq('workshop_id', context.workshopId).maybeSingle(),
+    supabaseAdmin.from('payment_transactions').select('*').eq('workshop_id', context.workshopId).order('created_at', { ascending: false }).limit(10),
+    supabaseAdmin.from('memberships').select('*', { count: 'exact', head: true }).eq('workshop_id', context.workshopId).eq('active', true),
+    supabaseAdmin.from('work_orders').select('*', { count: 'exact', head: true }).eq('workshop_id', context.workshopId).gte('created_at', startOfMonth.toISOString()),
+  ])
   databaseError(error)
-  const { data: payments, error: paymentError } = await supabaseAdmin.from('payment_transactions').select('*').eq('workshop_id', context.workshopId).order('created_at', { ascending: false }).limit(10)
   databaseError(paymentError)
+  databaseError(usersResult.error); databaseError(ordersResult.error)
   return {
     subscription: subscription ? { planId: subscription.plan_id, status: subscription.status, billingPeriod: subscription.billing_period, currentPeriodStartsAt: subscription.current_period_starts_at, currentPeriodEndsAt: subscription.current_period_ends_at } : null,
+    usage: { users: usersResult.count || 0, monthlyOrders: ordersResult.count || 0 },
     recentPayments: (payments || []).map(item => ({ id: item.id, reference: item.reference, planId: subscription?.plan_id, billingPeriod: item.billing_period, amountInCents: Number(item.amount_in_cents), currency: item.currency, status: item.status, createdAt: item.created_at })),
   }
 }
@@ -660,6 +697,7 @@ async function seedInitialWorkshop(workshopId, ownerId) {
 
 export async function initializeSupabaseIfRequested() {
   if (!supabaseConfigured) return { configured: false, initialized: false }
+  await syncPlanCatalog()
   const nit = process.env.INITIAL_WORKSHOP_NIT || '90234566'
   const email = (process.env.INITIAL_ADMIN_EMAIL || 'motorpro@gmail.com').toLowerCase()
   const fullName = process.env.INITIAL_ADMIN_NAME || 'Administrador Taller Motor Pro'

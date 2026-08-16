@@ -11,7 +11,7 @@
     "client": "vite",
     "server": "node server/index.mjs",
     "start": "node server/index.mjs",
-    "test": "node --test server/wompi.test.mjs",
+    "test": "node --test server/plans.test.mjs server/wompi.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

@@ -86,7 +86,7 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   }))
   router.post('/api/billing/checkout', adminOnly, asyncRoute(async (req, res) => {
     const plan = findPlan(String(req.body?.planId || '')), billingPeriod = req.body?.billingPeriod === 'annual' ? 'annual' : 'monthly'
-    if (!plan) return res.status(400).json({ error: 'Selecciona un plan válido' })
+    if (!plan || plan.monthlyPrice === 0) return res.status(400).json({ error: 'Selecciona un plan de pago válido' })
     const reference = paymentReference(req.user.workshopId, plan.id), amountInCents = planAmount(plan, billingPeriod) * 100
     const payment = await createSupabasePayment(req.user, plan, billingPeriod, reference, amountInCents)
     const publicKey = process.env.WOMPI_PUBLIC_KEY, integritySecret = process.env.WOMPI_INTEGRITY_SECRET

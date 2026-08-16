@@ -23,13 +23,15 @@ Los valores son hipótesis comerciales y deben validarse con talleres reales. El
 
 | Plan | Mensual | Anual | Usuarios | Órdenes/mes | Fotos | Sedes |
 |---|---:|---:|---:|---:|---:|---:|
+| Gratis | $0 | $0 | 1 | 20 | 5 por orden / 0,25 GB | 1 |
 | Esencial | $79.000 | $790.000 | 3 | 150 | 2 GB | 1 |
 | Profesional | $149.000 | $1.490.000 | 10 | 500 | 10 GB | 1 |
 | Empresarial | $299.000 | $2.990.000 | 30 | 2.000 | 50 GB | 3 |
 
 Recomendación comercial:
 
-- 14 días de prueba, sin tarjeta, con datos de ejemplo.
+- Plan Gratis sin tarjeta y sin vencimiento; los datos se conservan al alcanzar un límite.
+- Mostrar el consumo de usuarios y órdenes dentro de la página de planes.
 - Plan Profesional marcado como recomendado.
 - Configuración inicial y migración de datos se cobran aparte cuando requieran trabajo manual.
 - No prometer WhatsApp automático, DIAN ni múltiples sedes en un plan hasta que la integración esté terminada y probada.
@@ -39,7 +41,7 @@ Recomendación comercial:
 
 1. El propietario registra nombre, NIT, teléfono, ciudad, correo y aceptación de términos/política de datos.
 2. Supabase Auth confirma el correo y crea el usuario propietario.
-3. Una función de backend crea, en una sola transacción, el taller, perfil, membresía `owner` y suscripción de prueba.
+3. Una función de backend crea el taller, perfil, membresía `owner` y suscripción permanente al plan Gratis.
 4. El propietario invita usuarios. Cada invitación tiene vencimiento y rol; nunca se comparte una contraseña entre operarios.
 5. Durante la prueba se muestran consumo y fecha de vencimiento.
 6. Al elegir un plan, el backend crea una referencia única y firma el checkout de Wompi.
