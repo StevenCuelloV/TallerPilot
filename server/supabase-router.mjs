@@ -8,8 +8,9 @@ import {
   addSupabaseEvidence, addSupabaseNote, authenticateSupabase, bootstrapSupabase,
   createSupabaseCustomer, createSupabaseExpense, createSupabaseInvoice, createSupabaseOrder,
   createSupabasePayment, createSupabaseUser, deleteSupabaseCustomer, listSupabaseUsers,
-  processSupabaseWompiEvent, signInSupabase, subscriptionSupabase, updateSupabaseCustomer,
-  updateSupabaseOrder, updateSupabaseQuote,
+  processSupabaseWompiEvent, registerSupabaseWorkshop, requestSupabasePasswordReset,
+  signInSupabase, subscriptionSupabase, updateSupabaseCustomer, updateSupabaseOrder,
+  updateSupabasePassword, updateSupabaseQuote,
 } from './supabase.mjs'
 
 const upload = multer({
@@ -31,6 +32,8 @@ const formatMoney = value => new Intl.NumberFormat('es-CO', { style: 'currency',
 export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   const router = express.Router()
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Demasiados intentos. Espera 15 minutos e inténtalo de nuevo.' } })
+  const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Se alcanzó el límite temporal de registros desde esta conexión.' } })
+  const recoveryLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Espera antes de solicitar otro enlace de recuperación.' } })
   const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 500, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Límite temporal de solicitudes alcanzado.' } })
   const clients = new Set()
   const broadcast = (type, data) => {
@@ -48,6 +51,16 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
     const email = String(req.body?.email || '').trim().toLowerCase(), password = String(req.body?.password || '')
     if (!email || !password) return res.status(400).json({ error: 'Correo y contraseña son obligatorios' })
     res.json(await signInSupabase(email, password))
+  }))
+  router.post('/api/auth/register', registerLimiter, asyncRoute(async (req, res) => {
+    const result = await registerSupabaseWorkshop(req.body, appBaseUrl)
+    res.status(201).json(result)
+  }))
+  router.post('/api/auth/forgot-password', recoveryLimiter, asyncRoute(async (req, res) => {
+    res.json(await requestSupabasePasswordReset(req.body?.email, appBaseUrl))
+  }))
+  router.post('/api/auth/update-password', recoveryLimiter, asyncRoute(async (req, res) => {
+    res.json(await updateSupabasePassword(req.body?.recoveryToken, req.body?.password))
   }))
   router.get('/api/events', asyncRoute(async (req, res) => {
     await authenticateSupabase(req.query.token)

@@ -82,6 +82,126 @@ export async function signInSupabase(email, password) {
   return { token: data.session.access_token, user: { id: user.id, name: user.name, email: user.email, role: user.role } }
 }
 
+function validateNewAccount(input) {
+  const result = {
+    workshopName: String(input?.workshopName || '').trim(),
+    nit: String(input?.nit || '').replace(/\D/g, ''),
+    city: String(input?.city || '').trim(),
+    phone: String(input?.phone || '').replace(/[^\d+]/g, ''),
+    fullName: String(input?.fullName || '').trim(),
+    email: String(input?.email || '').trim().toLowerCase(),
+    password: String(input?.password || ''),
+  }
+  if (result.workshopName.length < 3 || result.fullName.length < 3 || result.city.length < 2) {
+    throw Object.assign(new Error('Completa el nombre del taller, la ciudad y el nombre del propietario'), { status: 400 })
+  }
+  if (result.nit.length < 7 || result.nit.length > 15) throw Object.assign(new Error('Ingresa un NIT o documento válido'), { status: 400 })
+  if (!/^\S+@\S+\.\S+$/.test(result.email)) throw Object.assign(new Error('Ingresa un correo electrónico válido'), { status: 400 })
+  if (result.phone.replace(/\D/g, '').length < 7) throw Object.assign(new Error('Ingresa un teléfono válido'), { status: 400 })
+  if (result.password.length < 12 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(result.password) || !/\d/.test(result.password)) {
+    throw Object.assign(new Error('La contraseña debe tener mínimo 12 caracteres e incluir letras y números'), { status: 400 })
+  }
+  return result
+}
+
+export async function registerSupabaseWorkshop(input, appBaseUrl) {
+  const account = validateNewAccount(input)
+  const [workshopResult, usersResult] = await Promise.all([
+    supabaseAdmin.from('workshops').select('id').eq('nit', account.nit).maybeSingle(),
+    supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+  ])
+  databaseError(workshopResult.error)
+  databaseError(usersResult.error)
+  if (workshopResult.data) throw Object.assign(new Error('Ya existe un taller registrado con ese NIT o documento'), { status: 409 })
+  if (usersResult.data.users.some(user => user.email?.toLowerCase() === account.email)) {
+    throw Object.assign(new Error('Ya existe una cuenta con ese correo. Intenta iniciar sesión o restablecer la contraseña.'), { status: 409 })
+  }
+
+  const requireEmailConfirmation = process.env.AUTH_REQUIRE_EMAIL_CONFIRMATION === 'true'
+  let authUser, accessToken = null
+  if (requireEmailConfirmation) {
+    const signup = await supabasePublic.auth.signUp({
+      email: account.email,
+      password: account.password,
+      options: { emailRedirectTo: `${appBaseUrl}/?auth=confirmed`, data: { full_name: account.fullName } },
+    })
+    databaseError(signup.error, 'No fue posible enviar la confirmación de correo')
+    authUser = signup.data.user
+    accessToken = signup.data.session?.access_token || null
+  } else {
+    const created = await supabaseAdmin.auth.admin.createUser({
+      email: account.email,
+      password: account.password,
+      email_confirm: true,
+      user_metadata: { full_name: account.fullName },
+    })
+    databaseError(created.error, 'No fue posible crear la cuenta')
+    authUser = created.data.user
+  }
+  if (!authUser) throw Object.assign(new Error('No fue posible crear la cuenta'), { status: 500 })
+
+  let workshop = null
+  try {
+    const createdWorkshop = await supabaseAdmin.from('workshops').insert({
+      name: account.workshopName,
+      legal_name: 'Taller automotor',
+      nit: account.nit,
+      email: account.email,
+      phone: account.phone,
+      whatsapp: account.phone.replace(/\D/g, ''),
+      city: account.city,
+    }).select().single()
+    databaseError(createdWorkshop.error); workshop = createdWorkshop.data
+    const profile = await supabaseAdmin.from('profiles').insert({ id: authUser.id, full_name: account.fullName, phone: account.phone }).select().single()
+    databaseError(profile.error)
+    const membership = await supabaseAdmin.from('memberships').insert({ workshop_id: workshop.id, user_id: authUser.id, role: 'owner' }).select().single()
+    databaseError(membership.error)
+    const subscription = await supabaseAdmin.from('subscriptions').insert({ workshop_id: workshop.id, plan_id: 'esencial', status: 'trialing', billing_period: 'monthly' }).select().single()
+    databaseError(subscription.error)
+  } catch (error) {
+    if (workshop) await supabaseAdmin.from('workshops').delete().eq('id', workshop.id)
+    await supabaseAdmin.auth.admin.deleteUser(authUser.id)
+    throw error
+  }
+
+  if (!requireEmailConfirmation) {
+    const signedIn = await signInSupabase(account.email, account.password)
+    accessToken = signedIn.token
+  }
+  return {
+    token: accessToken,
+    requiresEmailConfirmation: requireEmailConfirmation && !accessToken,
+    message: requireEmailConfirmation && !accessToken
+      ? 'Cuenta creada. Revisa tu correo para confirmar el acceso.'
+      : 'Tu taller fue creado y ya puedes comenzar.',
+  }
+}
+
+export async function requestSupabasePasswordReset(email, appBaseUrl) {
+  const normalizedEmail = String(email || '').trim().toLowerCase()
+  if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw Object.assign(new Error('Ingresa un correo electrónico válido'), { status: 400 })
+  const { error } = await supabasePublic.auth.resetPasswordForEmail(normalizedEmail, { redirectTo: `${appBaseUrl}/?auth=recovery` })
+  if (error) {
+    console.error('Supabase password reset:', error.message)
+    if (error.status === 429) throw Object.assign(new Error('Espera un minuto antes de solicitar otro correo'), { status: 429 })
+    throw Object.assign(new Error('El servicio de correo todavía no pudo enviar el enlace. Verifica la configuración SMTP de Supabase.'), { status: 503 })
+  }
+  return { message: 'Si el correo está registrado, recibirás un enlace para crear una nueva contraseña.' }
+}
+
+export async function updateSupabasePassword(recoveryToken, password) {
+  const token = String(recoveryToken || '')
+  const nextPassword = String(password || '')
+  if (nextPassword.length < 12 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(nextPassword) || !/\d/.test(nextPassword)) {
+    throw Object.assign(new Error('La contraseña debe tener mínimo 12 caracteres e incluir letras y números'), { status: 400 })
+  }
+  const { data, error } = await supabaseAdmin.auth.getUser(token)
+  if (error || !data?.user) throw Object.assign(new Error('El enlace de recuperación es inválido o ya venció'), { status: 401 })
+  const updated = await supabaseAdmin.auth.admin.updateUserById(data.user.id, { password: nextPassword })
+  databaseError(updated.error, 'No fue posible actualizar la contraseña')
+  return { message: 'Contraseña actualizada. Ya puedes iniciar sesión.' }
+}
+
 async function getOrder(context, value) {
   const orderNumber = orderNumberFromId(value)
   const { data, error } = await supabaseAdmin.from('work_orders').select('*')

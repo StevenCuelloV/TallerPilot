@@ -38,6 +38,15 @@ export async function login(email: string, password: string) {
   return result
 }
 
+export async function register(data: unknown) {
+  const result = await request<{token:string|null;requiresEmailConfirmation:boolean;message:string}>('/api/auth/register', { method:'POST', body:JSON.stringify(data) })
+  if(result.token)session.set(result.token)
+  return result
+}
+
+export const requestPasswordReset = (email:string) => request<{message:string}>('/api/auth/forgot-password', {method:'POST',body:JSON.stringify({email})})
+export const updatePassword = (recoveryToken:string,password:string) => request<{message:string}>('/api/auth/update-password', {method:'POST',body:JSON.stringify({recoveryToken,password})})
+
 export const api = {
   plans: () => request<any[]>('/api/public/plans'),
   bootstrap: () => request<any>('/api/bootstrap'),

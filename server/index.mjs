@@ -69,6 +69,9 @@ app.post('/api/auth/login',loginLimiter,asyncRoute(async(req,res)=>{
   if(!user||!await bcrypt.compare(String(password||''),user.passwordHash))return res.status(401).json({error:'Correo o contraseña incorrectos'})
   const safe={id:user.id,name:user.name,email:user.email,role:user.role};res.json({token:jwt.sign(safe,JWT_SECRET,{expiresIn:'12h'}),user:safe})
 }))
+app.post('/api/auth/register',loginLimiter,(_req,res)=>res.status(503).json({error:'El registro de talleres requiere la conexión con Supabase'}))
+app.post('/api/auth/forgot-password',loginLimiter,(_req,res)=>res.status(503).json({error:'La recuperación de contraseña requiere la conexión con Supabase'}))
+app.post('/api/auth/update-password',loginLimiter,(_req,res)=>res.status(503).json({error:'La recuperación de contraseña requiere la conexión con Supabase'}))
 app.get('/api/events',(req,res)=>{const token=req.query.token;try{jwt.verify(token,JWT_SECRET)}catch{return res.status(401).end()}res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.flushHeaders();res.write('event: connected\ndata: {"ok":true}\n\n');clients.add(res);req.on('close',()=>clients.delete(res))})
 
 app.post('/api/webhooks/wompi',asyncRoute(async(req,res)=>{

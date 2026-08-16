@@ -27,6 +27,8 @@ Cuando `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` y `SUPABASE_SECRET_KEY` están
 
 En la primera conexión agrega temporalmente `INITIAL_ADMIN_PASSWORD` en Render con una contraseña única de mínimo 12 caracteres. Al arrancar, el backend crea Taller Motor Pro, su suscripción de prueba y el propietario `motorpro@gmail.com`. Comprueba el acceso y después elimina esa variable; la cuenta permanece en Supabase Auth.
 
+El acceso público incluye registro de talleres y recuperación de contraseña. Mientras se valida la demostración, `AUTH_REQUIRE_EMAIL_CONFIRMATION=false` permite crear la cuenta e ingresar inmediatamente. Antes de producción configura un servidor SMTP propio en Supabase y cambia esta variable a `true`, de modo que cada propietario deba confirmar su correo.
+
 ## Incluido en el prototipo
 
 - Inicio de sesión y perfil de usuario/rol.
