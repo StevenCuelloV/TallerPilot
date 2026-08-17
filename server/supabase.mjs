@@ -24,6 +24,7 @@ const QUOTE_TO_DB = { Borrador: 'draft', Enviada: 'sent', Autorizada: 'approved'
 const QUOTE_FROM_DB = { draft: 'Borrador', sent: 'Enviada', approved: 'Autorizada', rejected: 'Rechazada', expired: 'Vencida' }
 const PHASE_TO_DB = { Ingreso: 'entry', Diagnóstico: 'diagnosis', Diagnostico: 'diagnosis', Proceso: 'process', Antes: 'before', Después: 'after', Despues: 'after', Entrega: 'delivery' }
 const PHASE_FROM_DB = { entry: 'Ingreso', diagnosis: 'Diagnóstico', process: 'Proceso', before: 'Antes', after: 'Después', delivery: 'Entrega' }
+const CUSTODY_NOTE = { arrival: '[CUSTODIA_INGRESO]', delivery: '[CUSTODIA_ENTREGA]' }
 
 function databaseError(error, fallback = 'No fue posible completar la operación') {
   if (!error) return
@@ -49,6 +50,28 @@ async function currentPlan(context) {
   const { data: plan, error: planError } = await supabaseAdmin.from('plans').select('id,name,limits').eq('id', planId).maybeSingle()
   databaseError(planError)
   return plan || { id: 'gratis', name: 'Gratis', limits: PLANS.find(item => item.id === 'gratis').limits }
+}
+
+function custodyNoteValue(notes, orderId, prefix) {
+  const note = notes.find(item => item.order_id === orderId && String(item.body || '').startsWith(prefix))
+  return note ? String(note.body).slice(prefix.length).trim() : ''
+}
+
+async function saveCustodyNote(context, orderId, prefix, rawValue) {
+  const value = String(rawValue || '').trim().slice(0, 180)
+  const { data: existing, error: findError } = await supabaseAdmin.from('order_notes').select('id,body').eq('workshop_id', context.workshopId).eq('order_id', orderId).like('body', `${prefix}%`)
+  databaseError(findError)
+  const current = existing?.[0] ? String(existing[0].body).slice(prefix.length).trim() : ''
+  if (current === value) return false
+  if (existing?.length) {
+    const removed = await supabaseAdmin.from('order_notes').delete().in('id', existing.map(item => item.id)).eq('workshop_id', context.workshopId)
+    databaseError(removed.error)
+  }
+  if (value) {
+    const inserted = await supabaseAdmin.from('order_notes').insert({ workshop_id: context.workshopId, order_id: orderId, author_user_id: context.id, audience: 'internal', body: `${prefix} ${value}` })
+    databaseError(inserted.error)
+  }
+  return true
 }
 
 function publicOrderId(orderNumber) {
@@ -343,8 +366,10 @@ export async function bootstrapSupabase(context) {
       reason: order.reason || '',
       diagnosis: order.diagnosis || '',
       finalDiagnosis: order.final_diagnosis || '',
+      arrivalContact: custodyNoteValue(notes, order.id, CUSTODY_NOTE.arrival),
+      deliveryContact: custodyNoteValue(notes, order.id, CUSTODY_NOTE.delivery),
       createdAt: order.created_at,
-      notes: notes.filter(note => note.order_id === order.id).map(note => ({
+      notes: notes.filter(note => note.order_id === order.id && !String(note.body || '').startsWith('[CUSTODIA_')).map(note => ({
         id: note.id, author: profiles.get(note.author_user_id)?.full_name || 'Equipo del taller',
         role: ROLE_FROM_DB[memberships.find(item => item.user_id === note.author_user_id)?.role] || 'Taller',
         at: note.created_at, text: note.body,
@@ -505,7 +530,13 @@ export async function createSupabaseOrder(context, input) {
     affected_areas: input.affectedAreas || [], paint_color: input.paintColor || null,
   }).select().single()
   databaseError(error)
+  const arrivalContact = String(input.arrivalContact || '').trim().slice(0, 180)
+  if (arrivalContact) {
+    try { await saveCustodyNote(context, order.id, CUSTODY_NOTE.arrival, arrivalContact) }
+    catch (custodyError) { await supabaseAdmin.from('work_orders').delete().eq('id', order.id).eq('workshop_id', context.workshopId); throw custodyError }
+  }
   await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.created', entity_type: 'work_order', entity_id: order.id, metadata: { event: 'Orden creada y recepción registrada', author: context.name } })
+  if (arrivalContact) await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.custody.arrival', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Vehículo entregado al taller por: ${arrivalContact}`, author: context.name } })
   return (await bootstrapSupabase(context)).orders.find(item => item.id === publicOrderId(order.order_number))
 }
 
@@ -527,6 +558,19 @@ export async function updateSupabaseOrder(context, orderId, input) {
   }
   const { error } = await supabaseAdmin.from('work_orders').update(updates).eq('id', order.id).eq('workshop_id', context.workshopId)
   databaseError(error)
+  const custodyEvents = []
+  if (input.arrivalContact !== undefined && await saveCustodyNote(context, order.id, CUSTODY_NOTE.arrival, input.arrivalContact)) {
+    const value = String(input.arrivalContact || '').trim().slice(0, 180)
+    custodyEvents.push(value ? `Vehículo entregado al taller por: ${value}` : 'Se eliminó el registro de quien entregó el vehículo')
+  }
+  if (input.deliveryContact !== undefined && await saveCustodyNote(context, order.id, CUSTODY_NOTE.delivery, input.deliveryContact)) {
+    const value = String(input.deliveryContact || '').trim().slice(0, 180)
+    custodyEvents.push(value ? `Vehículo retirado del taller por: ${value}` : 'Se eliminó el registro de quien retiró el vehículo')
+  }
+  if (custodyEvents.length) {
+    const custodyAudit = await supabaseAdmin.from('audit_logs').insert(custodyEvents.map(event => ({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.custody.updated', entity_type: 'work_order', entity_id: order.id, metadata: { event, author: context.name } })))
+    databaseError(custodyAudit.error)
+  }
   if (input.stage && input.stage !== order.stage) await supabaseAdmin.from('audit_logs').insert({
     workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.stage.updated', entity_type: 'work_order', entity_id: order.id,
     metadata: { event: `Orden avanzó a ${input.stage}`, author: context.name, previous: order.stage, current: input.stage },

@@ -20,7 +20,7 @@ function seed() {
     { id:'cli_sinu', type:'Empresa', documentType:'NIT', document:'901.335.421-8', name:'Transportes del Sinú SAS', phone:'+57 312 642 8820', email:'operaciones@transportessinu.co', address:'Cereté, Córdoba', vehicles:[{id:'veh_nhr',plate:'WMN 521',brand:'Chevrolet',model:'NHR',year:2021,color:'Blanco',mileage:114200}] },
     { id:'cli_sofia', type:'Persona natural', documentType:'CC', document:'1.003.882.772', name:'Sofía Gómez', phone:'+57 301 994 3012', email:'sofia@example.com', address:'Montería, Córdoba', vehicles:[{id:'veh_kia',plate:'DQR 608',brand:'Kia',model:'Picanto',year:2019,color:'Rojo',mileage:73200}] },
   ]
-  const makeOrder = (o) => ({ serviceArea:'Mecánica general', affectedAreas:[], paintColor:'', mileage:48320, fuel:'½ tanque', receivedItems:'Llave + documentos', reason:'Revisión general solicitada por el cliente.', notes:[], evidence:[], history:[{id:id('his'),event:'Orden creada y recepción registrada',at:now(),author:'Laura Méndez'}], quote:{status:'Borrador',items:[],taxRate:19}, ...o })
+  const makeOrder = (o) => ({ serviceArea:'Mecánica general', affectedAreas:[], paintColor:'', mileage:48320, fuel:'½ tanque', receivedItems:'Llave + documentos', reason:'Revisión general solicitada por el cliente.', diagnosis:'', finalDiagnosis:'', arrivalContact:'', deliveryContact:'', createdAt:now(), notes:[], evidence:[], history:[{id:id('his'),event:'Orden creada y recepción registrada',at:now(),author:'Laura Méndez'}], quote:{status:'Borrador',items:[],taxRate:19}, ...o })
   const orders = [
     makeOrder({id:'OT-0248',customerId:'cli_carlos',vehicleId:'veh_mazda',customer:'Carlos Ramírez',phone:'+57 300 456 7890',car:'Mazda CX-30 Touring 2022',plate:'JTU 427',tech:'Andrés López',stage:'Reparación',progress:64,value:1845000,delivery:'Hoy, 4:30 p. m.',color:'#f05a37',reason:'Vibración al frenar y revisión preventiva de los 50.000 km.',notes:[{id:'not_1',author:'Andrés López',role:'Técnico',at:now(),text:'Se confirma desgaste irregular en las pastillas delanteras. Los discos están dentro de tolerancia.'},{id:'not_2',author:'Carlos Ramírez',role:'Cliente',at:now(),text:'Por favor revisar también el ruido que se siente al girar hacia la derecha.'}],quote:{status:'Autorizada',taxRate:19,items:[{id:'q1',name:'Juego pastillas de freno delanteras',type:'Repuesto',qty:1,price:420000},{id:'q2',name:'Rectificación de discos delanteros',type:'Servicio',qty:2,price:130000},{id:'q3',name:'Mano de obra sistema de frenos',type:'Servicio',qty:1,price:260000},{id:'q4',name:'Mantenimiento preventivo 50.000 km',type:'Servicio',qty:1,price:540000}]}}),
     makeOrder({id:'OT-0247',customerId:'cli_mariana',vehicleId:'veh_duster',customer:'Mariana Torres',phone:'+57 315 220 1144',car:'Renault Duster 2020',plate:'KLP 912',tech:'Diego Pérez',stage:'Diagnóstico',progress:26,value:185000,delivery:'Mañana, 10:00 a. m.',color:'#657bdf'}),
@@ -28,7 +28,7 @@ function seed() {
     makeOrder({id:'OT-0245',serviceArea:'Electricidad automotriz',customerId:'cli_sofia',vehicleId:'veh_kia',customer:'Sofía Gómez',phone:'+57 301 994 3012',car:'Kia Picanto 2019',plate:'DQR 608',tech:'Camilo Ruiz',stage:'Autorización',progress:48,value:730000,delivery:'16 ago., 11:00 a. m.',color:'#e5a437'}),
   ]
   return {
-    version:3,
+    version:4,
     workshop:{id:'motorpro',name:'Taller Motor Pro',businessType:'Comercial',nit:'90234566',address:'Cra. 6 #32-4',city:'Montería',phone:'+57 300 290 2939',whatsapp:'573002902939',email:'motorpro@gmail.com'},
     users:[{id:'usr_admin',name:'Julián Sánchez',email:'motorpro@gmail.com',passwordHash:bcrypt.hashSync(BRAND.demoPassword,12),role:'Administrador'}],
     plans:PLANS,
@@ -61,6 +61,16 @@ export async function ensureDb() {
       existing.version=3
       const demoAdmin=existing.users?.find(user=>user.email?.toLowerCase()==='motorpro@gmail.com')
       if(demoAdmin)demoAdmin.passwordHash=bcrypt.hashSync(BRAND.demoPassword,12)
+      changed=true
+    }
+    if((existing.version||1)<4){
+      existing.version=4
+      for(const order of existing.orders||[]){
+        order.diagnosis=order.diagnosis||''
+        order.finalDiagnosis=order.finalDiagnosis||''
+        order.arrivalContact=order.arrivalContact||''
+        order.deliveryContact=order.deliveryContact||''
+      }
       changed=true
     }
     if(changed)await fs.writeFile(dbFile,JSON.stringify(existing,null,2),'utf8')
