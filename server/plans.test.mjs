@@ -17,3 +17,10 @@ test('mantiene tres opciones pagas después del plan gratuito', () => {
   assert.equal(planAmount(findPlan('esencial'), 'monthly'), 79000)
   assert.equal(planAmount(findPlan('esencial'), 'annual'), 790000)
 })
+
+test('reserva el crecimiento multisede para planes superiores', () => {
+  assert.equal(findPlan('gratis').limits.locations, 1)
+  assert.equal(findPlan('esencial').limits.locations, 1)
+  assert.equal(findPlan('profesional').limits.locations, 2)
+  assert.equal(findPlan('empresarial').limits.locations, 3)
+})

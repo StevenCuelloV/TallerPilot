@@ -26,8 +26,8 @@ export const PLANS = [
     monthlyPrice: 149000,
     annualPrice: 1490000,
     recommended: true,
-    limits: { users: 10, monthlyOrders: 500, storageGb: 10, locations: 1, evidencePerOrder: 200 },
-    features: ['Todo en Esencial', 'Roles y auditoría', 'Portal de seguimiento', 'Automatización de WhatsApp', 'Reportes avanzados'],
+    limits: { users: 10, monthlyOrders: 500, storageGb: 10, locations: 2, evidencePerOrder: 200 },
+    features: ['Todo en Esencial', 'Hasta 2 sedes', 'Roles y auditoría', 'Automatización de WhatsApp', 'Reportes avanzados'],
   },
   {
     id: 'empresarial',

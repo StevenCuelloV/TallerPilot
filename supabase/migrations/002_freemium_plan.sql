@@ -7,8 +7,8 @@ insert into public.plans (id,name,description,monthly_price_cop,annual_price_cop
  '{"users":3,"monthlyOrders":150,"storageGb":2,"locations":1,"evidencePerOrder":50}',
  '["Clientes y vehículos","Órdenes y evidencias","Cotizaciones PDF","WhatsApp manual","Contabilidad básica"]',true),
 ('profesional','Profesional','La operación completa para un taller tecnificado en crecimiento.',149000,1490000,
- '{"users":10,"monthlyOrders":500,"storageGb":10,"locations":1,"evidencePerOrder":200}',
- '["Todo en Esencial","Roles y auditoría","Portal de seguimiento","Automatización de WhatsApp","Reportes avanzados"]',true),
+ '{"users":10,"monthlyOrders":500,"storageGb":10,"locations":2,"evidencePerOrder":200}',
+ '["Todo en Esencial","Hasta 2 sedes","Roles y auditoría","Automatización de WhatsApp","Reportes avanzados"]',true),
 ('empresarial','Empresarial','Para centros automotrices con varias áreas o sedes.',299000,2990000,
  '{"users":30,"monthlyOrders":2000,"storageGb":50,"locations":3,"evidencePerOrder":500}',
  '["Todo en Profesional","Hasta 3 sedes","MFA obligatorio","Integraciones y API","Soporte prioritario"]',true)

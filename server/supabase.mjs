@@ -25,6 +25,8 @@ const QUOTE_FROM_DB = { draft: 'Borrador', sent: 'Enviada', approved: 'Autorizad
 const PHASE_TO_DB = { Ingreso: 'entry', Diagnóstico: 'diagnosis', Diagnostico: 'diagnosis', Proceso: 'process', Antes: 'before', Después: 'after', Despues: 'after', Entrega: 'delivery' }
 const PHASE_FROM_DB = { entry: 'Ingreso', diagnosis: 'Diagnóstico', process: 'Proceso', before: 'Antes', after: 'Después', delivery: 'Entrega' }
 const CUSTODY_NOTE = { arrival: '[CUSTODIA_INGRESO]', delivery: '[CUSTODIA_ENTREGA]' }
+const LOCATION_NOTE = '[SEDE]'
+const ASSIGNABLE_ROLES = new Set(['owner', 'admin', 'technician'])
 
 function databaseError(error, fallback = 'No fue posible completar la operación') {
   if (!error) return
@@ -72,6 +74,41 @@ async function saveCustodyNote(context, orderId, prefix, rawValue) {
     databaseError(inserted.error)
   }
   return true
+}
+
+function mainLocation(context) {
+  return { id: 'loc_main', name: 'Sede principal', address: context.workshop.address || '', city: context.workshop.city || '', phone: context.workshop.phone || '', isMain: true, createdAt: context.workshop.created_at }
+}
+
+async function listLocationRows(context) {
+  const { data, error } = await supabaseAdmin.from('audit_logs').select('*').eq('workshop_id', context.workshopId).eq('entity_type', 'workshop_location').eq('action', 'location.created').order('created_at')
+  databaseError(error)
+  return data || []
+}
+
+export async function listSupabaseLocations(context) {
+  const rows = await listLocationRows(context)
+  return [mainLocation(context), ...rows.map(item => ({ id: item.entity_id, name: item.metadata?.name || 'Sede', address: item.metadata?.address || '', city: item.metadata?.city || '', phone: item.metadata?.phone || '', isMain: false, createdAt: item.created_at }))]
+}
+
+export async function createSupabaseLocation(context, input) {
+  const name = String(input?.name || '').trim(), address = String(input?.address || '').trim(), city = String(input?.city || '').trim(), phone = String(input?.phone || '').trim()
+  if (name.length < 3 || city.length < 2) throw Object.assign(new Error('Nombre de la sede y ciudad son obligatorios'), { status: 400 })
+  const [plan, locations] = await Promise.all([currentPlan(context), listSupabaseLocations(context)])
+  const limit = Number(plan.limits?.locations || 1)
+  if (locations.length >= limit) throw Object.assign(new Error(`El plan ${plan.name} permite ${limit} sede${limit === 1 ? '' : 's'}. Mejora al plan Empresarial para ampliar esta capacidad.`), { status: 409, code: 'PLAN_LIMIT' })
+  if (locations.some(item => item.name.toLowerCase() === name.toLowerCase())) throw Object.assign(new Error('Ya existe una sede con ese nombre'), { status: 409 })
+  const location = { id: `loc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`, name, address, city, phone, isMain: false, createdAt: new Date().toISOString() }
+  const { error } = await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'location.created', entity_type: 'workshop_location', entity_id: location.id, metadata: { name, address, city, phone, author: context.name } })
+  databaseError(error)
+  return location
+}
+
+export async function markSupabaseNotificationsRead(context) {
+  const readAt = new Date().toISOString()
+  const { error } = await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'notification.read', entity_type: 'notification_state', entity_id: context.id, metadata: { readAt } })
+  databaseError(error)
+  return { readAt }
 }
 
 function publicOrderId(orderNumber) {
@@ -304,6 +341,7 @@ async function signedEvidenceUrls(evidence) {
 export async function bootstrapSupabase(context) {
   const workshopId = context.workshopId
   const canViewAccounting = ['owner', 'admin', 'accountant'].includes(context.roleDb)
+  const canViewNotifications = ['owner', 'admin'].includes(context.roleDb)
   const queries = await Promise.all([
     supabaseAdmin.from('customers').select('*').eq('workshop_id', workshopId).order('created_at', { ascending: false }),
     supabaseAdmin.from('vehicles').select('*').eq('workshop_id', workshopId),
@@ -317,9 +355,11 @@ export async function bootstrapSupabase(context) {
     canViewAccounting ? supabaseAdmin.from('subscriptions').select('*').eq('workshop_id', workshopId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     supabaseAdmin.from('audit_logs').select('*').eq('workshop_id', workshopId).eq('entity_type', 'work_order').order('created_at'),
     supabaseAdmin.from('memberships').select('user_id,role').eq('workshop_id', workshopId).eq('active', true),
+    supabaseAdmin.from('audit_logs').select('*').eq('workshop_id', workshopId).eq('entity_type', 'workshop_location').eq('action', 'location.created').order('created_at'),
+    canViewNotifications ? supabaseAdmin.from('audit_logs').select('*').eq('workshop_id', workshopId).eq('entity_type', 'notification_state').eq('entity_id', context.id).order('created_at', { ascending: false }).limit(1) : Promise.resolve({ data: [], error: null }),
   ])
   for (const result of queries) databaseError(result.error)
-  const [customers, vehicles, orders, notes, evidence, quotes, quoteItems, invoices, expenses, subscription, audit, memberships] = queries.map(result => result.data || [])
+  const [customers, vehicles, orders, notes, evidence, quotes, quoteItems, invoices, expenses, subscription, audit, memberships, locationRows, notificationReadRows] = queries.map(result => result.data || [])
   const profileIds = [...new Set([
     context.id,
     ...memberships.map(item => item.user_id),
@@ -347,6 +387,7 @@ export async function bootstrapSupabase(context) {
       id: publicOrderId(order.order_number),
       customerId: order.customer_id,
       vehicleId: order.vehicle_id,
+      locationId: custodyNoteValue(notes, order.id, LOCATION_NOTE) || 'loc_main',
       customer: customer.name || 'Cliente',
       phone: customer.phone || '',
       car: [vehicle.brand, vehicle.model, vehicle.model_year].filter(Boolean).join(' ') || 'Vehículo',
@@ -354,6 +395,7 @@ export async function bootstrapSupabase(context) {
       serviceArea: order.service_area,
       affectedAreas: order.affected_areas || [],
       paintColor: order.paint_color || '',
+      techId: order.assigned_user_id || '',
       tech: profiles.get(order.assigned_user_id)?.full_name || 'Por asignar',
       stage: order.stage,
       progress: Number(order.progress),
@@ -369,7 +411,7 @@ export async function bootstrapSupabase(context) {
       arrivalContact: custodyNoteValue(notes, order.id, CUSTODY_NOTE.arrival),
       deliveryContact: custodyNoteValue(notes, order.id, CUSTODY_NOTE.delivery),
       createdAt: order.created_at,
-      notes: notes.filter(note => note.order_id === order.id && !String(note.body || '').startsWith('[CUSTODIA_')).map(note => ({
+      notes: notes.filter(note => note.order_id === order.id && !String(note.body || '').startsWith('[CUSTODIA_') && !String(note.body || '').startsWith(LOCATION_NOTE)).map(note => ({
         id: note.id, author: profiles.get(note.author_user_id)?.full_name || 'Equipo del taller',
         role: ROLE_FROM_DB[memberships.find(item => item.user_id === note.author_user_id)?.role] || 'Taller',
         at: note.created_at, text: note.body,
@@ -388,6 +430,15 @@ export async function bootstrapSupabase(context) {
   })
 
   const orderByUuid = new Map(orders.map(order => [order.id, mappedOrders.find(item => item.id === publicOrderId(order.order_number))]))
+  const locations = [mainLocation(context), ...locationRows.map(item => ({ id: item.entity_id, name: item.metadata?.name || 'Sede', address: item.metadata?.address || '', city: item.metadata?.city || '', phone: item.metadata?.phone || '', isMain: false, createdAt: item.created_at }))]
+  const operators = memberships.filter(item => ASSIGNABLE_ROLES.has(item.role)).map(item => ({ id: item.user_id, name: profiles.get(item.user_id)?.full_name || 'Usuario del taller', role: ROLE_FROM_DB[item.role] || 'Técnico' }))
+  const readAt = notificationReadRows[0]?.created_at || ''
+  const notificationActions = new Set(['order.created', 'order.updated', 'order.assigned', 'order.stage.updated', 'order.quote.updated', 'order.note.created', 'order.evidence.created', 'order.custody.updated', 'order.custody.arrival'])
+  const notifications = canViewNotifications ? [...audit].reverse().filter(item => notificationActions.has(item.action)).slice(0, 80).map(item => {
+    const order = orderByUuid.get(item.entity_id), type = item.action === 'order.created' ? 'created' : item.action === 'order.assigned' ? 'assigned' : item.action === 'order.stage.updated' ? 'stage' : 'updated'
+    const title = type === 'created' ? `Nueva orden ${order?.id || ''}` : type === 'assigned' ? `Orden asignada · ${order?.id || ''}` : type === 'stage' ? `Cambio de estado · ${order?.id || ''}` : `Orden modificada · ${order?.id || ''}`
+    return { id: String(item.id), type, title, message: `${order?.plate || 'Vehículo'} · ${item.metadata?.event || item.action}`, at: item.created_at, orderId: order?.id || '', unread: !readAt || item.created_at > readAt }
+  }) : []
   return {
     currentUser: { id: context.id, name: context.name, email: context.email, role: context.role },
     workshop: {
@@ -398,6 +449,10 @@ export async function bootstrapSupabase(context) {
     },
     customers: customers.map(customer => mapCustomer(customer, vehicles)),
     orders: mappedOrders,
+    locations,
+    operators,
+    notifications,
+    unreadNotifications: notifications.filter(item => item.unread).length,
     expenses: expenses.map(item => ({ id: item.id, date: item.expense_date, category: item.category, description: item.description, amount: Number(item.amount_cop) })),
     invoices: invoices.map(item => {
       const order = orderByUuid.get(item.order_id)
@@ -517,31 +572,36 @@ export async function createSupabaseOrder(context, input) {
     throw Object.assign(new Error(`Alcanzaste las ${plan.limits.monthlyOrders} órdenes mensuales del plan ${plan.name}. Mejora tu plan para seguir creando órdenes.`), { status: 409, code: 'PLAN_LIMIT' })
   }
 
-  let assignedUserId = null
-  if (input.tech && input.tech !== 'Por asignar') {
-    const users = await listSupabaseUsers(context)
-    assignedUserId = users.find(user => user.name === input.tech)?.id || null
-  }
+  const [users, locations] = await Promise.all([listSupabaseUsers(context), listSupabaseLocations(context)])
+  const operator = users.find(user => user.id === input.techId || user.name === input.tech)
+  if (!operator || !['Propietario', 'Administrador', 'Técnico'].includes(operator.role)) throw Object.assign(new Error('Selecciona un operario responsable para crear la orden'), { status: 400 })
+  const location = locations.find(item => item.id === input.locationId) || locations[0]
+  if (!location) throw Object.assign(new Error('Selecciona una sede válida'), { status: 400 })
   const { data: order, error } = await supabaseAdmin.from('work_orders').insert({
     workshop_id: context.workshopId, customer_id: customer.id, vehicle_id: vehicle.id,
-    assigned_user_id: assignedUserId, service_area: input.serviceArea || 'Mecánica general',
+    assigned_user_id: operator.id, service_area: input.serviceArea || 'Mecánica general',
     stage: 'Ingreso', progress: 8, reason: input.reason || '', mileage: Number(input.mileage || vehicle.mileage || 0),
     fuel_level: input.fuel || 'Por registrar', received_items: input.receivedItems || 'Llave',
     affected_areas: input.affectedAreas || [], paint_color: input.paintColor || null,
   }).select().single()
   databaseError(error)
   const arrivalContact = String(input.arrivalContact || '').trim().slice(0, 180)
-  if (arrivalContact) {
-    try { await saveCustodyNote(context, order.id, CUSTODY_NOTE.arrival, arrivalContact) }
-    catch (custodyError) { await supabaseAdmin.from('work_orders').delete().eq('id', order.id).eq('workshop_id', context.workshopId); throw custodyError }
-  }
-  await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.created', entity_type: 'work_order', entity_id: order.id, metadata: { event: 'Orden creada y recepción registrada', author: context.name } })
+  try {
+    await saveCustodyNote(context, order.id, LOCATION_NOTE, location.id)
+    if (arrivalContact) await saveCustodyNote(context, order.id, CUSTODY_NOTE.arrival, arrivalContact)
+  } catch (tagError) { await supabaseAdmin.from('work_orders').delete().eq('id', order.id).eq('workshop_id', context.workshopId); throw tagError }
+  const orderAudit = await supabaseAdmin.from('audit_logs').insert([
+    { workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.created', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Orden creada en ${location.name}`, author: context.name, locationId: location.id } },
+    { workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.assigned', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Orden asignada a ${operator.name}`, author: context.name, assignedUserId: operator.id } },
+  ])
+  databaseError(orderAudit.error)
   if (arrivalContact) await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.custody.arrival', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Vehículo entregado al taller por: ${arrivalContact}`, author: context.name } })
   return (await bootstrapSupabase(context)).orders.find(item => item.id === publicOrderId(order.order_number))
 }
 
 export async function updateSupabaseOrder(context, orderId, input) {
   const order = await getOrder(context, orderId)
+  let assignedOperator = null
   const updates = {
     stage: input.stage, progress: input.progress == null ? undefined : Number(input.progress), reason: input.reason,
     diagnosis: input.diagnosis, final_diagnosis: input.finalDiagnosis, mileage: input.mileage == null ? undefined : Number(input.mileage),
@@ -549,12 +609,11 @@ export async function updateSupabaseOrder(context, orderId, input) {
     paint_color: input.paintColor || null, updated_at: new Date().toISOString(),
   }
   Object.keys(updates).forEach(key => updates[key] === undefined && delete updates[key])
-  if (input.tech) {
-    if (input.tech === 'Por asignar') updates.assigned_user_id = null
-    else {
-      const users = await listSupabaseUsers(context)
-      updates.assigned_user_id = users.find(user => user.name === input.tech)?.id || order.assigned_user_id
-    }
+  if (input.techId !== undefined || input.tech) {
+    const users = await listSupabaseUsers(context)
+    assignedOperator = users.find(user => user.id === input.techId || user.name === input.tech)
+    if (!assignedOperator || !['Propietario', 'Administrador', 'Técnico'].includes(assignedOperator.role)) throw Object.assign(new Error('Selecciona un operario válido'), { status: 400 })
+    updates.assigned_user_id = assignedOperator.id
   }
   const { error } = await supabaseAdmin.from('work_orders').update(updates).eq('id', order.id).eq('workshop_id', context.workshopId)
   databaseError(error)
@@ -571,10 +630,15 @@ export async function updateSupabaseOrder(context, orderId, input) {
     const custodyAudit = await supabaseAdmin.from('audit_logs').insert(custodyEvents.map(event => ({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.custody.updated', entity_type: 'work_order', entity_id: order.id, metadata: { event, author: context.name } })))
     databaseError(custodyAudit.error)
   }
-  if (input.stage && input.stage !== order.stage) await supabaseAdmin.from('audit_logs').insert({
-    workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.stage.updated', entity_type: 'work_order', entity_id: order.id,
-    metadata: { event: `Orden avanzó a ${input.stage}`, author: context.name, previous: order.stage, current: input.stage },
-  })
+  const auditEvents = []
+  if (input.stage && input.stage !== order.stage) auditEvents.push({ action: 'order.stage.updated', event: `Orden avanzó a ${input.stage}`, metadata: { previous: order.stage, current: input.stage } })
+  if (assignedOperator && assignedOperator.id !== order.assigned_user_id) auditEvents.push({ action: 'order.assigned', event: `Orden asignada a ${assignedOperator.name}`, metadata: { assignedUserId: assignedOperator.id } })
+  const regularFields = ['progress','reason','diagnosis','finalDiagnosis','mileage','fuel','receivedItems','affectedAreas','paintColor']
+  if (!auditEvents.length && !custodyEvents.length && regularFields.some(field => input[field] !== undefined)) auditEvents.push({ action: 'order.updated', event: 'Orden modificada', metadata: {} })
+  if (auditEvents.length) {
+    const result = await supabaseAdmin.from('audit_logs').insert(auditEvents.map(item => ({ workshop_id: context.workshopId, actor_user_id: context.id, action: item.action, entity_type: 'work_order', entity_id: order.id, metadata: { event: item.event, author: context.name, ...item.metadata } })))
+    databaseError(result.error)
+  }
   return (await bootstrapSupabase(context)).orders.find(item => item.id === orderId)
 }
 
@@ -584,6 +648,8 @@ export async function addSupabaseNote(context, orderId, text) {
   const order = await getOrder(context, orderId)
   const { data, error } = await supabaseAdmin.from('order_notes').insert({ workshop_id: context.workshopId, order_id: order.id, author_user_id: context.id, audience: 'both', body }).select().single()
   databaseError(error)
+  const audit = await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.note.created', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Nueva nota de ${context.name}`, author: context.name } })
+  databaseError(audit.error)
   return { id: data.id, author: context.name, role: context.role, at: data.created_at, text: data.body }
 }
 
@@ -611,6 +677,8 @@ export async function addSupabaseEvidence(context, orderId, files, type, caption
     }))).select()
     databaseError(error)
     const urls = await signedEvidenceUrls(data)
+    const audit = await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.evidence.created', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Se agregaron ${data.length} evidencias`, author: context.name } })
+    databaseError(audit.error)
     return data.map((item, index) => ({ id: item.id, url: urls.get(item.storage_path), name: uploaded[index].originalname, type: PHASE_FROM_DB[item.phase], caption: item.caption || '', at: item.created_at, author: context.name, index }))
   } catch (error) {
     if (uploaded.length) await supabaseAdmin.storage.from(bucket).remove(uploaded.map(item => item.storagePath))
@@ -630,6 +698,7 @@ export async function updateSupabaseQuote(context, orderId, input) {
     const result = await supabaseAdmin.from('quotes').insert({ workshop_id: context.workshopId, order_id: order.id, ...values }).select().single(); databaseError(result.error); quote = result.data
   }
   const items = Array.isArray(input.items) ? input.items : []
+  let mapped
   if (items.length) {
     const result = await supabaseAdmin.from('quote_items').insert(items.map(item => ({
       workshop_id: context.workshopId, quote_id: quote.id,
@@ -637,9 +706,13 @@ export async function updateSupabaseQuote(context, orderId, input) {
       description: item.name, quantity: Number(item.qty), unit_price_cop: Number(item.price),
     }))).select()
     databaseError(result.error)
-    return mapQuote(quote, result.data)
+    mapped = mapQuote(quote, result.data)
+  } else {
+    mapped = mapQuote(quote, [])
   }
-  return mapQuote(quote, [])
+  const audit = await supabaseAdmin.from('audit_logs').insert({ workshop_id: context.workshopId, actor_user_id: context.id, action: 'order.quote.updated', entity_type: 'work_order', entity_id: order.id, metadata: { event: `Cotización actualizada · ${mapped.status}`, author: context.name } })
+  databaseError(audit.error)
+  return mapped
 }
 
 export async function createSupabaseExpense(context, input) {

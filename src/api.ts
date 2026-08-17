@@ -62,6 +62,8 @@ export const api = {
   addInvoice: (data:unknown) => request<any>('/api/invoices',{method:'POST',body:JSON.stringify(data)}),
   users: () => request<any[]>('/api/users'),
   createUser: (data:unknown) => request<any>('/api/users',{method:'POST',body:JSON.stringify(data)}),
+  createLocation: (data:unknown) => request<any>('/api/locations',{method:'POST',body:JSON.stringify(data)}),
+  markNotificationsRead: () => request<{readAt:string}>('/api/notifications/read',{method:'POST'}),
   subscription: () => request<any>('/api/billing/subscription'),
   checkout: (planId:string,billingPeriod:'monthly'|'annual') => request<any>('/api/billing/checkout',{method:'POST',body:JSON.stringify({planId,billingPeriod})}),
   confirmDemoPayment: (reference:string) => request<any>('/api/billing/demo-confirm',{method:'POST',body:JSON.stringify({reference})}),
@@ -79,6 +81,6 @@ export const api = {
 export function subscribe(onChange:()=>void){
   const token=session.token();if(!token)return()=>{}
   const source=new EventSource(`/api/events?token=${encodeURIComponent(token)}`)
-  ;['order.created','order.updated','order.note','order.evidence','customer.created','customer.updated','expense.created','invoice.created','subscription.updated','reset'].forEach(event=>source.addEventListener(event,onChange))
+  ;['order.created','order.updated','order.note','order.evidence','order.quote','customer.created','customer.updated','expense.created','invoice.created','subscription.updated','location.created','reset'].forEach(event=>source.addEventListener(event,onChange))
   return()=>source.close()
 }

@@ -39,6 +39,9 @@ El acceso público incluye registro de talleres y recuperación de contraseña. 
 - Inspección de ingreso, kilometraje, combustible, elementos recibidos y evidencia visual.
 - Carga local de fotos desde el detalle de una orden.
 - Actividades técnicas, progreso, técnico responsable e historial.
+- Centro de notificaciones para administradores con órdenes en curso, cambios de estado, modificaciones y asignaciones.
+- Asignación obligatoria de cada nueva orden a un operario activo del taller.
+- Selector de sedes con vista individual o consolidada y creación de nuevas sedes según el plan contratado.
 - Historial permanente por placa con visitas, kilometraje, diagnósticos, servicios, repuestos y valores para respaldar garantías.
 - Registro opcional de la persona que entrega y de la persona que retira el vehículo, independiente del propietario.
 - Notas del cliente, técnico y administrativo.

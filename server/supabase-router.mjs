@@ -6,9 +6,9 @@ import { PLANS, findPlan, planAmount } from './plans.mjs'
 import { WOMPI_CHECKOUT_URL, integritySignature, paymentReference, verifyWompiEvent } from './wompi.mjs'
 import {
   addSupabaseEvidence, addSupabaseNote, authenticateSupabase, bootstrapSupabase,
-  createSupabaseCustomer, createSupabaseExpense, createSupabaseInvoice, createSupabaseOrder,
+  createSupabaseCustomer, createSupabaseExpense, createSupabaseInvoice, createSupabaseLocation, createSupabaseOrder,
   createSupabasePayment, createSupabaseUser, deleteSupabaseCustomer, listSupabaseUsers,
-  processSupabaseWompiEvent, registerSupabaseWorkshop, requestSupabasePasswordReset,
+  markSupabaseNotificationsRead, processSupabaseWompiEvent, registerSupabaseWorkshop, requestSupabasePasswordReset,
   signInSupabase, subscriptionSupabase, updateSupabaseCustomer, updateSupabaseOrder,
   updateSupabasePassword, updateSupabaseQuote,
 } from './supabase.mjs'
@@ -35,10 +35,10 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Se alcanzó el límite temporal de registros desde esta conexión.' } })
   const recoveryLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Espera antes de solicitar otro enlace de recuperación.' } })
   const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 500, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Límite temporal de solicitudes alcanzado.' } })
-  const clients = new Set()
-  const broadcast = (type, data) => {
+  const clients = new Map()
+  const broadcast = (workshopId, type, data) => {
     const message = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`
-    for (const response of clients) response.write(message)
+    for (const response of clients.get(workshopId) || []) response.write(message)
   }
   const auth = asyncRoute(async (req, _res, next) => {
     req.user = await authenticateSupabase(req.headers.authorization?.replace(/^Bearer\s+/, ''))
@@ -63,14 +63,14 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
     res.json(await updateSupabasePassword(req.body?.recoveryToken, req.body?.password))
   }))
   router.get('/api/events', asyncRoute(async (req, res) => {
-    await authenticateSupabase(req.query.token)
+    const user = await authenticateSupabase(req.query.token)
     res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive'); res.flushHeaders()
-    res.write('event: connected\ndata: {"ok":true}\n\n'); clients.add(res); req.on('close', () => clients.delete(res))
+    res.write('event: connected\ndata: {"ok":true}\n\n');if(!clients.has(user.workshopId))clients.set(user.workshopId,new Set());clients.get(user.workshopId).add(res);req.on('close',()=>{const group=clients.get(user.workshopId);group?.delete(res);if(!group?.size)clients.delete(user.workshopId)})
   }))
   router.post('/api/webhooks/wompi', asyncRoute(async (req, res) => {
     if (!verifyWompiEvent(req.body, process.env.WOMPI_EVENTS_SECRET || '', req.get('X-Event-Checksum'))) return res.status(401).json({ error: 'Firma de evento Wompi no válida' })
     const payment = await processSupabaseWompiEvent(req.body)
-    if (payment) broadcast('subscription.updated', { reference: payment.reference, status: req.body?.data?.transaction?.status })
+    if (payment) broadcast(payment.workshop_id, 'subscription.updated', { reference: payment.reference, status: req.body?.data?.transaction?.status })
     res.json({ received: true, ignored: !payment })
   }))
 
@@ -79,6 +79,8 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   router.post('/api/reset', (_req, res) => res.status(403).json({ error: 'El reinicio masivo está deshabilitado cuando TallerPilot usa la base de datos real' }))
   router.get('/api/users', adminOnly, asyncRoute(async (req, res) => res.json(await listSupabaseUsers(req.user))))
   router.post('/api/users', adminOnly, asyncRoute(async (req, res) => res.status(201).json(await createSupabaseUser(req.user, req.body))))
+  router.post('/api/notifications/read', adminOnly, asyncRoute(async (req, res) => res.json(await markSupabaseNotificationsRead(req.user))))
+  router.post('/api/locations', adminOnly, asyncRoute(async (req, res) => { const data = await createSupabaseLocation(req.user, req.body); broadcast(req.user.workshopId, 'location.created', data); res.status(201).json(data) }))
 
   router.get('/api/billing/subscription', adminOnly, asyncRoute(async (req, res) => {
     const account = await subscriptionSupabase(req.user)
@@ -97,18 +99,18 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
   }))
   router.post('/api/billing/demo-confirm', (_req, res) => res.status(isProduction ? 404 : 501).json({ error: 'La simulación de pagos no modifica la base de datos real' }))
 
-  router.post('/api/customers', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseCustomer(req.user, req.body); broadcast('customer.created', data); res.status(201).json(data) }))
-  router.put('/api/customers/:id', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseCustomer(req.user, req.params.id, req.body); broadcast('customer.updated', data); res.json(data) }))
+  router.post('/api/customers', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseCustomer(req.user, req.body); broadcast(req.user.workshopId, 'customer.created', data); res.status(201).json(data) }))
+  router.put('/api/customers/:id', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseCustomer(req.user, req.params.id, req.body); broadcast(req.user.workshopId, 'customer.updated', data); res.json(data) }))
   router.delete('/api/customers/:id', customerWrite, asyncRoute(async (req, res) => { await deleteSupabaseCustomer(req.user, req.params.id); res.status(204).end() }))
-  router.post('/api/orders', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseOrder(req.user, req.body); broadcast('order.created', data); res.status(201).json(data) }))
-  router.put('/api/orders/:id', orderWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseOrder(req.user, req.params.id, req.body); broadcast('order.updated', data); res.json(data) }))
-  router.post('/api/orders/:id/notes', noteWrite, asyncRoute(async (req, res) => { const data = await addSupabaseNote(req.user, req.params.id, req.body?.text); broadcast('order.note', { orderId: req.params.id, note: data }); res.status(201).json(data) }))
+  router.post('/api/orders', customerWrite, asyncRoute(async (req, res) => { const data = await createSupabaseOrder(req.user, req.body); broadcast(req.user.workshopId, 'order.created', data); res.status(201).json(data) }))
+  router.put('/api/orders/:id', orderWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseOrder(req.user, req.params.id, req.body); broadcast(req.user.workshopId, 'order.updated', data); res.json(data) }))
+  router.post('/api/orders/:id/notes', noteWrite, asyncRoute(async (req, res) => { const data = await addSupabaseNote(req.user, req.params.id, req.body?.text); broadcast(req.user.workshopId, 'order.note', { orderId: req.params.id, note: data }); res.status(201).json(data) }))
   router.post('/api/orders/:id/evidence', orderWrite, upload.array('files', 8), asyncRoute(async (req, res) => {
     if (!req.files?.length) return res.status(400).json({ error: 'Selecciona al menos una fotografía JPG, PNG o WEBP' })
     const data = await addSupabaseEvidence(req.user, req.params.id, req.files, req.body.type || 'Proceso', req.body.caption || '')
-    broadcast('order.evidence', { orderId: req.params.id, items: data }); res.status(201).json(data)
+    broadcast(req.user.workshopId, 'order.evidence', { orderId: req.params.id, items: data }); res.status(201).json(data)
   }))
-  router.put('/api/orders/:id/quote', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseQuote(req.user, req.params.id, req.body); broadcast('order.quote', { orderId: req.params.id, quote: data }); res.json(data) }))
+  router.put('/api/orders/:id/quote', customerWrite, asyncRoute(async (req, res) => { const data = await updateSupabaseQuote(req.user, req.params.id, req.body); broadcast(req.user.workshopId, 'order.quote', { orderId: req.params.id, quote: data }); res.json(data) }))
 
   router.get('/api/orders/:id/quote.pdf', asyncRoute(async (req, res) => {
     const db = await bootstrapSupabase(req.user), order = db.orders.find(item => item.id === req.params.id)
@@ -123,8 +125,8 @@ export function createSupabaseRouter({ appBaseUrl, isProduction, setupState }) {
     doc.moveTo(330, y).lineTo(547, y).stroke().text(`Subtotal: ${formatMoney(subtotal)}`, 330, y + 12, { width: 217, align: 'right' }).text(`IVA (${order.quote.taxRate || 0}%): ${formatMoney(tax)}`, 330, y + 30, { width: 217, align: 'right' }).fontSize(13).fillColor('#ef633f').text(`TOTAL: ${formatMoney(subtotal + tax)}`, 330, y + 52, { width: 217, align: 'right' })
     doc.fontSize(9).fillColor('#6d7788').text('Esta cotización no representa control de inventario.', 48, 730, { width: 499, align: 'center' }); doc.end()
   }))
-  router.post('/api/expenses', accountingWrite, asyncRoute(async (req, res) => { const data = await createSupabaseExpense(req.user, req.body); broadcast('expense.created', data); res.status(201).json(data) }))
-  router.post('/api/invoices', allowRoles('Propietario', 'Administrador', 'Asesor', 'Contador'), asyncRoute(async (req, res) => { const data = await createSupabaseInvoice(req.user, req.body); broadcast('invoice.created', data); res.status(201).json(data) }))
+  router.post('/api/expenses', accountingWrite, asyncRoute(async (req, res) => { const data = await createSupabaseExpense(req.user, req.body); broadcast(req.user.workshopId, 'expense.created', data); res.status(201).json(data) }))
+  router.post('/api/invoices', allowRoles('Propietario', 'Administrador', 'Asesor', 'Contador'), asyncRoute(async (req, res) => { const data = await createSupabaseInvoice(req.user, req.body); broadcast(req.user.workshopId, 'invoice.created', data); res.status(201).json(data) }))
   router.post('/api/orders/:id/whatsapp', asyncRoute(async (req, res) => {
     const db = await bootstrapSupabase(req.user), order = db.orders.find(item => item.id === req.params.id)
     if (!order) return res.status(404).json({ error: 'Orden no encontrada' })
